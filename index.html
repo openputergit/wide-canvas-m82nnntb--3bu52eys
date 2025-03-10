@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monad Racing Championship</title>
+    <script src="https://cdn.jsdelivr.net/npm/web3@1.5.2/dist/web3.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+</head>
+<style>
+    .car {
+        transition: transform 0.5s ease;
+        width: 80px;
+        height: 40px;
+        position: absolute;
+    }
+    .race-track {
+        background: repeating-linear-gradient(
+            90deg,
+            #333 0px,
+            #333 50px,
+            #666 50px,
+            #666 100px
+        );
+        animation: moveTrack 2s linear infinite;
+    }
+    @keyframes moveTrack {
+        from { background-position: 0 0; }
+        to { background-position: -100px 0; }
+    }
+    .car-1 { top: 10%; }
+    .car-2 { top: 30%; }
+    .car-3 { top: 50%; }
+    .car-4 { top: 70%; }
+    .car-5 { top: 90%; }
+    .boost-effect {
+        animation: boost 0.5s ease-in-out;
+    }
+    @keyframes boost {
+        0% { transform: scale(1) translateX(0); }
+        50% { transform: scale(1.2) translateX(20px); }
+        100% { transform: scale(1) translateX(0); }
+    }
+    .network-badge {
+        animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+        0% { opacity: 1; }
+        50% { opacity: 0.6; }
+        100% { opacity: 1; }
+    }
+    .progress-bar {
+        transition: width 0.3s ease;
+    }
+</style>
+<body class="bg-gradient-to-b from-gray-900 to-gray-800 text-white min-h-screen">
+    <header class="p-4 bg-gray-800/50 backdrop-blur-sm shadow-lg sticky top-0 z-50">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center gap-4">
+                <h1 class="text-2xl font-bold">🏎️ Monad Racing</h1>
+                <div id="networkBadge" class="network-badge hidden px-3 py-1 bg-purple-600 rounded-full text-sm">
+                    Monad Testnet
+                </div>
+            </div>
+            <div class="flex gap-4 items-center">
+                <div id="monBalance" class="hidden bg-gray-700 px-3 py-1 rounded-lg">
+                    <span id="balanceAmount">0</span> MON
+                </div>
+                <button id="switchNetwork" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg transition-all">
+                    Switch to Monad
+                </button>
+                <button id="connectWallet" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg transition-all">
+                    Connect Wallet
+                </button>
+                <button id="disconnectWallet" class="hidden bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-all">
+                    Disconnect
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto p-4">
+        <div class="text-center mb-8">
+            <h2 id="gameStatus" class="text-2xl font-bold mb-4">Connect your wallet to start racing!</h2>
+            <button id="registerBtn" disabled class="bg-green-600 hover:bg-green-700 px-6 py-3 rounded-lg text-lg disabled:opacity-50 disabled:cursor-not-allowed">
+                Register for Race (0/5 Players)
+            </button>
+        </div>
+
+        <div class="race-track h-96 relative mb-8 rounded-lg overflow-hidden border-4 border-gray-700">
+            <div id="cars" class="relative h-full">
+                <!-- Cars will be added here dynamically -->
+            </div>
+            <div class="absolute bottom-0 left-0 right-0 bg-gray-800/80 p-2">
+                <div id="finishLine" class="w-full bg-gray-700 h-2 rounded-full">
+                    <div class="progress-bar bg-green-500 h-full rounded-full" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-center mb-8">
+            <button id="boostBtn" disabled class="bg-red-600 hover:bg-red-700 px-8 py-4 rounded-lg text-xl disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-105">
+                🚀 BOOST! (<span id="boostPoints">0</span>/1000)
+            </button>
+        </div>
+
+        <div class="bg-gray-800/50 backdrop-blur-sm p-6 rounded-lg shadow-xl">
+            <h3 class="text-xl font-bold mb-4 flex items-center gap-2">
+                🏆 Race Leaderboard
+                <span id="raceId" class="text-sm text-gray-400">(Race #0)</span>
+            </h3>
+            <div id="leaderboard" class="space-y-3">
+                <!-- Leaderboard entries will be added here -->
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const CONTRACT_ABI = [{"inputs":[],"stateMutability":"nonpayable","type":"constructor"},{"anonymous":false,"inputs":[{"indexed":false,"internalType":"uint256","name":"raceId","type":"uint256"}],"name":"RaceStarted","type":"event"},{"anonymous":false,"inputs":[],"name":"LeaderboardReset","type":"event"},{"anonymous":false,"inputs":[{"indexed":false,"internalType":"uint256","name":"raceId","type":"uint256"},{"indexed":false,"internalType":"address","name":"winner","type":"address"}],"name":"RaceEnded","type":"event"},{"anonymous":false,"inputs":[{"indexed":false,"internalType":"uint256","name":"raceId","type":"uint256"},{"indexed":false,"internalType":"address","name":"player","type":"address"},{"indexed":false,"internalType":"uint256","name":"speed","type":"uint256"}],"name":"SpeedBoosted","type":"event"}];
+        const CONTRACT_ADDRESS = 'YOUR_CONTRACT_ADDRESS';
+        const MONAD_CHAIN_ID = '0x279f'; // 10143 in hex
+
+        let web3;
+        let contract;
+        let currentAccount = null;
+        let currentRaceId = 0;
+        let isRacing = false;
+        let playerPositions = {};
+
+        // Initialize Web3
+        async function initWeb3() {
+            if (window.ethereum) {
+                web3 = new Web3(window.ethereum);
+                contract = new web3.eth.Contract(CONTRACT_ABI, CONTRACT_ADDRESS);
+                
+                // Check if already connected
+                const accounts = await web3.eth.getAccounts();
+                if (accounts.length > 0) {
+                    currentAccount = accounts[0];
+                    handleAccountsChanged(accounts);
+                }
+            } else {
+                alert('Please install MetaMask to play!');
+            }
+        }
+
+        async function connectWallet() {
+            try {
+                const accounts = await window.ethereum.request({ 
+                    method: 'eth_requestAccounts' 
+                });
+                handleAccountsChanged(accounts);
+            } catch (error) {
+                console.error(error);
+                alert('Failed to connect wallet');
+            }
+        }
+
+        function disconnectWallet() {
+            currentAccount = null;
+            updateUI();
+        }
+
+        async function switchToMonad() {
+            try {
+                await window.ethereum.request({
+                    method: 'wallet_switchEthereumChain',
+                    params: [{ chainId: MONAD_CHAIN_ID }]
+                });
+            } catch (error) {
+                if (error.code === 4902) {
+                    try {
+                        await window.ethereum.request({
+                            method: 'wallet_addEthereumChain',
+                            params: [{
+                                chainId: MONAD_CHAIN_ID,
+                                chainName: 'Monad Testnet',
+                                nativeCurrency: {
+                                    name: 'MON',
+                                    symbol: 'MON',
+                                    decimals: 18
+                                },
+                                rpcUrls: ['https://testnet-rpc.monad.xyz'],
+                                blockExplorerUrls: ['https://explorer.monad-testnet.category.xyz']
+                            }]
+                        });
+                    } catch (addError) {
+                        console.error(addError);
+                    }
+                }
+                console.error(error);
+            }
+        }
+
+        async function handleAccountsChanged(accounts) {
+            if (accounts.length === 0) {
+                currentAccount = null;
+            } else if (accounts[0] !== currentAccount) {
+                currentAccount = accounts[0];
+            }
+            updateUI();
+        }
+
+        async function updateUI() {
+            const isConnected = currentAccount !== null;
+            const isMonad = await checkIfMonadNetwork();
+
+            // Update wallet connection buttons
+            document.getElementById('connectWallet').style.display = isConnected ? 'none' : 'block';
+            document.getElementById('disconnectWallet').style.display = isConnected ? 'block' : 'none';
+            document.getElementById('switchNetwork').style.display = isConnected && !isMonad ? 'block' : 'none';
+            document.getElementById('networkBadge').style.display = isMonad ? 'block' : 'none';
+            
+            if (isConnected) {
+                document.getElementById('connectWallet').textContent = 
+                    `${currentAccount.slice(0, 6)}...${currentAccount.slice(-4)}`;
+                
+                if (isMonad) {
+                    const balance = await web3.eth.getBalance(currentAccount);
+                    document.getElementById('monBalance').style.display = 'block';
+                    document.getElementById('balanceAmount').textContent = 
+                        web3.utils.fromWei(balance, 'ether').slice(0, 6);
+                }
+            }
+
+            document.getElementById('registerBtn').disabled = !isConnected || !isMonad;
+            document.getElementById('boostBtn').disabled = !isRacing;
+        }
+
+        async function checkIfMonadNetwork() {
+            const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+            return chainId === MONAD_CHAIN_ID;
+        }
+
+        async function registerForRace() {
+            try {
+                await contract.methods.registerForRace().send({ from: currentAccount });
+                isRacing = true;
+                updateUI();
+            } catch (error) {
+                console.error(error);
+                alert('Failed to register for race');
+            }
+        }
+
+        async function boost() {
+            if (!isRacing) return;
+            try {
+                await contract.methods.boostSpeed(currentRaceId).send({ from: currentAccount });
+                const boostPoints = await contract.methods.getBoostPoints(currentRaceId, currentAccount).call();
+                document.getElementById('boostPoints').textContent = boostPoints;
+                updateCarPosition(currentAccount, boostPoints);
+            } catch (error) {
+                console.error(error);
+            }
+        }
+
+        function updateCarPosition(address, points) {
+            const carElement = document.querySelector(`[data-address="${address}"]`);
+            if (carElement) {
+                const progress = (points / 1000) * 100;
+                carElement.style.left = `${progress}%`;
+                document.querySelector('.progress-bar').style.width = `${progress}%`;
+            }
+        }
+
+        // Event Listeners
+        document.getElementById('connectWallet').addEventListener('click', connectWallet);
+        document.getElementById('disconnectWallet').addEventListener('click', disconnectWallet);
+        document.getElementById('switchNetwork').addEventListener('click', switchToMonad);
+        document.getElementById('registerBtn').addEventListener('click', registerForRace);
+        document.getElementById('boostBtn').addEventListener('click', boost);
+
+        // Initialize
+        initWeb3();
+
+        if (window.ethereum) {
+            window.ethereum.on('accountsChanged', handleAccountsChanged);
+            window.ethereum.on('chainChanged', () => window.location.reload());
+        }
+    </script>
+<script>document.body.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); return }, { passive: false })</script>
+	</body>
+</html>
